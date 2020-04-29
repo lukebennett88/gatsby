@@ -10,7 +10,12 @@ import {
   GraphQLError,
   ExecutionResult,
 } from "graphql"
+import { Path } from "graphql/jsutils/Path"
 import { debounce } from "lodash"
+import report, {
+  IPhantomReporter,
+  IActivityArgs,
+} from "gatsby-cli/lib/reporter"
 import * as nodeStore from "../db/nodes"
 import { createPageDependency } from "../redux/actions/add-page-dependency"
 
@@ -18,36 +23,10 @@ import withResolverContext from "../schema/context"
 import { LocalNodeModel } from "../schema/node-model"
 import { Store } from "redux"
 import { IGatsbyState } from "../redux/types"
+import { IGraphQLRunnerStatResults, IGraphQLRunnerStats } from "./types"
+import { IGraphQLSpanTracer } from "../schema/type-definitions"
 
 type Query = string | Source
-
-interface IGraphQLRunnerStats {
-  totalQueries: number
-  uniqueOperations: Set<string>
-  uniqueQueries: Set<string>
-  totalRunQuery: number
-  totalPluralRunQuery: number
-  totalIndexHits: number
-  totalSiftHits: number
-  totalNonSingleFilters: number
-  comparatorsUsed: Map<string, number>
-  uniqueFilterPaths: Set<string>
-  uniqueSorts: Set<string>
-}
-
-interface IGraphQLRunnerStatResults {
-  totalQueries: number
-  uniqueOperations: number
-  uniqueQueries: number
-  totalRunQuery: number
-  totalPluralRunQuery: number
-  totalIndexHits: number
-  totalSiftHits: number
-  totalNonSingleFilters: number
-  comparatorsUsed: Array<{ comparator: string; amount: number }>
-  uniqueFilterPaths: number
-  uniqueSorts: number
-}
 
 export default class GraphQLRunner {
   parseCache: Map<Query, DocumentNode>
@@ -156,7 +135,11 @@ export default class GraphQLRunner {
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  query(query: Query, context: Record<string, any>): Promise<ExecutionResult> {
+  async query(
+    query: Query,
+    context: Record<string, any>,
+    { parentSpan, queryName }: IActivityArgs & { queryName: string }
+  ): Promise<ExecutionResult> {
     const { schema, schemaCustomization } = this.store.getState()
 
     if (this.schema !== schema) {
@@ -186,7 +169,16 @@ export default class GraphQLRunner {
     const document = this.parse(query)
     const errors = this.validate(schema, document)
 
-    const result =
+    let tracer
+    if (parentSpan) {
+      const tracer = new GraphQLSpanTracer(`GraphQL Query ${queryName}`, {
+        parentSpan,
+      })
+
+      tracer.start()
+    }
+
+    const promise =
       errors.length > 0
         ? { errors }
         : execute({
@@ -200,6 +192,7 @@ export default class GraphQLRunner {
               customContext: schemaCustomization.context,
               nodeModel: this.nodeModel,
               stats: this.stats,
+              tracer,
             }),
             variableValues: context,
           })
@@ -208,6 +201,72 @@ export default class GraphQLRunner {
     // cache just wastes memory without much benefits.
     // TODO: consider a better strategy for cache purging/invalidation
     this.scheduleClearCache()
-    return Promise.resolve(result)
+
+    const result = await promise
+    if (tracer) {
+      tracer.end()
+    }
+    return result
   }
+}
+
+/**
+ * Tracks and knows how to get a parent span for a particular
+ *  point in query resolver for a particular query and path
+ */
+class GraphQLSpanTracer implements IGraphQLSpanTracer {
+  parentActivity: IPhantomReporter
+  activities: Map<string, IPhantomReporter>
+
+  constructor(name: string, activityArgs: IActivityArgs) {
+    this.parentActivity = report.phantomActivity(name, activityArgs)
+    this.activities = new Map()
+  }
+
+  getParentActivity(): IPhantomReporter {
+    return this.parentActivity
+  }
+
+  start(): void {
+    this.parentActivity.start()
+  }
+
+  end(): void {
+    this.parentActivity.end()
+  }
+
+  createResolverActivity(path: Path, name: string): IPhantomReporter {
+    let prev: Path | undefined = path.prev
+    while (prev && typeof prev.key === `number`) {
+      prev = prev.prev
+    }
+    const parentSpan = this.getActivity(prev).span
+    const activity = report.phantomActivity(name, { parentSpan })
+    this.setActivity(path, activity)
+    return activity
+  }
+
+  getActivity(gqlPath: Path | undefined): IPhantomReporter | null {
+    const path = pathToArray(gqlPath)
+    if (path.length > 0) {
+      return this.activities.get(path.join(`.`))
+    } else {
+      return this.parentActivity
+    }
+  }
+
+  setActivity(gqlPath: Path, activity: IPhantomReporter): void {
+    const path = pathToArray(gqlPath)
+    this.activities.set(path.join(`.`), activity)
+  }
+}
+
+function pathToArray(path: Path | undefined): Array<string | number> {
+  const flattened: Array<string | number> = []
+  let curr: Path | undefined = path
+  while (curr) {
+    flattened.push(curr.key)
+    curr = curr.prev
+  }
+  return flattened.reverse()
 }
