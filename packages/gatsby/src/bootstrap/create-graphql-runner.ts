@@ -17,7 +17,7 @@ type Runner = (
 export const createGraphQLRunner = (
   store: Store<IGatsbyState>,
   reporter: Reporter,
-  { parentSpan } = {}
+  { parentSpan } = { parentSpan: null }
 ): Runner => {
   // TODO: Move tracking of changed state inside GraphQLRunner itself. https://github.com/gatsbyjs/gatsby/issues/20941
   let runner = new GraphQLRunner(store)

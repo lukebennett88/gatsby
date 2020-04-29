@@ -1,8 +1,6 @@
 import { GraphQLSchema } from "graphql"
 import { SchemaComposer } from "graphql-compose"
 
-import { IPhantomReporter } from "gatsby-cli/lib/reporter"
-
 import { createPageDependency } from "../redux/actions/add-page-dependency"
 
 import { LocalNodeModel } from "./node-model"
@@ -21,11 +19,11 @@ export default function withResolverContext<TSource, TArgs>({
 }: {
   schema: GraphQLSchema
   schemaComposer: SchemaComposer<IGatsbyResolverContext<TSource, TArgs>>
-  context: Record<string, any>
-  customContext: Record<string, any>
-  nodeModel: any
-  stats: IGraphQLRunnerStats | null
-  tracer: IGraphQLSpanTracer
+  context?: Record<string, any>
+  customContext?: Record<string, any>
+  nodeModel?: any
+  stats?: IGraphQLRunnerStats | null
+  tracer?: IGraphQLSpanTracer
 }): IGatsbyResolverContext<TSource, TArgs> {
   const nodeStore = require(`../db/nodes`)
 
@@ -45,8 +43,8 @@ export default function withResolverContext<TSource, TArgs>({
     nodeModel: nodeModel.withContext({
       path: context ? context.path : undefined,
     }),
-    stats,
-    tracer,
+    stats: stats || null,
+    tracer: tracer || null,
   }
 }
 

@@ -9,7 +9,7 @@ export interface IGatsbyResolverContext<TSource, TArgs> {
   defaultFieldResolver: GatsbyResolver<TSource, TArgs>
   nodeModel: any
   stats: IGraphQLRunnerStats | null
-  tracer: IGraphQLSpanTracer
+  tracer: IGraphQLSpanTracer | null
   [key: string]: any
 }
 
